@@ -504,6 +504,7 @@ export const _renderScene = ({
       renderSelection = true,
       renderGrid = true,
       isExporting,
+      exportBackgroundImage,
     } = renderConfig;
 
     const selectionColor = renderConfig.selectionColor || oc.black;
@@ -532,14 +533,14 @@ export const _renderScene = ({
         context.clearRect(0, 0, normalizedCanvasWidth, normalizedCanvasHeight);
       }
       context.save();
-      if (isExporting) {
+      if (isExporting && exportBackgroundImage) {
         context.save();
         addExportBackground(
           canvas,
           normalizedCanvasWidth,
           normalizedCanvasHeight,
-          "/backgrounds/01.svg",
-          "#fff",
+          exportBackgroundImage,
+          renderConfig.viewBackgroundColor,
         );
       } else {
         context.fillStyle = renderConfig.viewBackgroundColor;
