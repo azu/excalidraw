@@ -392,6 +392,9 @@ const addExportBackground = (
   svgUrl: string,
   rectangleColor: string,
 ): void => {
+  const MARGIN = 24;
+  const BORDER_RADIUS = 12;
+
   const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
 
   // Create a new image object
@@ -399,8 +402,37 @@ const addExportBackground = (
 
   // When the image has loaded
   img.onload = (): void => {
-    // Draw the image onto the canvas
-    ctx.drawImage(img, 0, 0, normalizedCanvasWidth, canvas.height);
+    // Scale image to fill canvas and draw it onto the canvas
+    ctx.save();
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      ctx.roundRect(
+        0,
+        0,
+        normalizedCanvasWidth,
+        normalizedCanvasHeight,
+        BORDER_RADIUS,
+      );
+    } else {
+      roundRect(
+        ctx,
+        0,
+        0,
+        normalizedCanvasWidth,
+        normalizedCanvasHeight,
+        BORDER_RADIUS,
+      );
+    }
+    const scale = Math.max(
+      normalizedCanvasWidth / img.width,
+      normalizedCanvasHeight / img.height,
+    );
+    const x = (normalizedCanvasWidth - img.width * scale) / 2;
+    const y = (normalizedCanvasHeight - img.height * scale) / 2;
+    ctx.clip();
+    ctx.drawImage(img, x, y, img.width * scale, img.height * scale);
+    ctx.closePath();
+    ctx.restore();
 
     // Create shadow similar to the CSS box-shadow
     const shadows = [
@@ -426,46 +458,38 @@ const addExportBackground = (
     ];
 
     shadows.forEach((shadow, index): void => {
-      const MARGIN = 24;
-      const BORDER_RADIUS = 12;
-
+      ctx.save();
+      ctx.beginPath();
       ctx.shadowColor = `rgba(0, 0, 0, ${shadow.alpha})`;
       ctx.shadowBlur = shadow.blur;
       ctx.shadowOffsetX = shadow.offsetX;
       ctx.shadowOffsetY = shadow.offsetY;
 
-      // Define path for rectangle
-      ctx.beginPath();
-      ctx.moveTo(MARGIN, MARGIN);
-      ctx.lineTo(normalizedCanvasWidth - MARGIN, MARGIN);
-      ctx.quadraticCurveTo(
-        normalizedCanvasWidth,
-        MARGIN,
-        normalizedCanvasWidth,
-        MARGIN + BORDER_RADIUS,
-      );
-      ctx.lineTo(normalizedCanvasWidth, normalizedCanvasHeight - MARGIN);
-      ctx.quadraticCurveTo(
-        normalizedCanvasWidth,
-        normalizedCanvasHeight,
-        normalizedCanvasWidth - MARGIN,
-        normalizedCanvasHeight,
-      );
-      ctx.lineTo(MARGIN, normalizedCanvasHeight);
-      ctx.quadraticCurveTo(
-        0,
-        normalizedCanvasHeight,
-        0,
-        normalizedCanvasHeight - MARGIN,
-      );
-      ctx.lineTo(0, MARGIN + BORDER_RADIUS);
-      ctx.quadraticCurveTo(0, MARGIN, MARGIN, MARGIN);
-      ctx.closePath();
+      if (ctx.roundRect) {
+        ctx.roundRect(
+          MARGIN,
+          MARGIN,
+          normalizedCanvasWidth - MARGIN * 2,
+          normalizedCanvasHeight - MARGIN * 2,
+          BORDER_RADIUS,
+        );
+      } else {
+        roundRect(
+          ctx,
+          MARGIN,
+          MARGIN,
+          normalizedCanvasWidth - MARGIN * 2,
+          normalizedCanvasHeight - MARGIN * 2,
+          BORDER_RADIUS,
+        );
+      }
 
       if (index === shadows.length - 1) {
         ctx.fillStyle = rectangleColor;
         ctx.fill();
       }
+      ctx.closePath();
+      ctx.restore();
     });
 
     // Reset shadow properties for future drawings
@@ -534,7 +558,6 @@ export const _renderScene = ({
       }
       context.save();
       if (isExporting && exportBackgroundImage) {
-        context.save();
         addExportBackground(
           canvas,
           normalizedCanvasWidth,
