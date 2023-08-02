@@ -391,116 +391,124 @@ const addExportBackground = (
   normalizedCanvasHeight: number,
   svgUrl: string,
   rectangleColor: string,
-): void => {
-  const MARGIN = 24;
-  const BORDER_RADIUS = 12;
+): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    const MARGIN = 24;
+    const BORDER_RADIUS = 12;
 
-  const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
+    const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
 
-  // Create a new image object
-  const img = new Image();
+    // Create a new image object
+    const img = new Image();
 
-  // When the image has loaded
-  img.onload = (): void => {
-    // Scale image to fill canvas and draw it onto the canvas
-    ctx.save();
-    ctx.beginPath();
-    if (ctx.roundRect) {
-      ctx.roundRect(
-        0,
-        0,
-        normalizedCanvasWidth,
-        normalizedCanvasHeight,
-        BORDER_RADIUS,
-      );
-    } else {
-      roundRect(
-        ctx,
-        0,
-        0,
-        normalizedCanvasWidth,
-        normalizedCanvasHeight,
-        BORDER_RADIUS,
-      );
-    }
-    const scale = Math.max(
-      normalizedCanvasWidth / img.width,
-      normalizedCanvasHeight / img.height,
-    );
-    const x = (normalizedCanvasWidth - img.width * scale) / 2;
-    const y = (normalizedCanvasHeight - img.height * scale) / 2;
-    ctx.clip();
-    ctx.drawImage(img, x, y, img.width * scale, img.height * scale);
-    ctx.closePath();
-    ctx.restore();
-
-    // Create shadow similar to the CSS box-shadow
-    const shadows = [
-      {
-        offsetX: 0,
-        offsetY: 0.7698959708213806,
-        blur: 1.4945039749145508,
-        alpha: 0.02,
-      },
-      {
-        offsetX: 0,
-        offsetY: 1.1299999952316284,
-        blur: 4.1321120262146,
-        alpha: 0.04,
-      },
-      {
-        offsetX: 0,
-        offsetY: 4.130000114440918,
-        blur: 9.94853401184082,
-        alpha: 0.05,
-      },
-      { offsetX: 0, offsetY: 13, blur: 33, alpha: 0.07 },
-    ];
-
-    shadows.forEach((shadow, index): void => {
+    // When the image has loaded
+    img.onload = (): void => {
+      // Scale image to fill canvas and draw it onto the canvas
       ctx.save();
       ctx.beginPath();
-      ctx.shadowColor = `rgba(0, 0, 0, ${shadow.alpha})`;
-      ctx.shadowBlur = shadow.blur;
-      ctx.shadowOffsetX = shadow.offsetX;
-      ctx.shadowOffsetY = shadow.offsetY;
-
       if (ctx.roundRect) {
         ctx.roundRect(
-          MARGIN,
-          MARGIN,
-          normalizedCanvasWidth - MARGIN * 2,
-          normalizedCanvasHeight - MARGIN * 2,
+          0,
+          0,
+          normalizedCanvasWidth,
+          normalizedCanvasHeight,
           BORDER_RADIUS,
         );
       } else {
         roundRect(
           ctx,
-          MARGIN,
-          MARGIN,
-          normalizedCanvasWidth - MARGIN * 2,
-          normalizedCanvasHeight - MARGIN * 2,
+          0,
+          0,
+          normalizedCanvasWidth,
+          normalizedCanvasHeight,
           BORDER_RADIUS,
         );
       }
-
-      if (index === shadows.length - 1) {
-        ctx.fillStyle = rectangleColor;
-        ctx.fill();
-      }
+      const scale = Math.max(
+        normalizedCanvasWidth / img.width,
+        normalizedCanvasHeight / img.height,
+      );
+      const x = (normalizedCanvasWidth - img.width * scale) / 2;
+      const y = (normalizedCanvasHeight - img.height * scale) / 2;
+      ctx.clip();
+      ctx.drawImage(img, x, y, img.width * scale, img.height * scale);
       ctx.closePath();
       ctx.restore();
-    });
 
-    // Reset shadow properties for future drawings
-    ctx.shadowColor = "transparent";
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
-  };
+      // Create shadow similar to the CSS box-shadow
+      const shadows = [
+        {
+          offsetX: 0,
+          offsetY: 0.7698959708213806,
+          blur: 1.4945039749145508,
+          alpha: 0.02,
+        },
+        {
+          offsetX: 0,
+          offsetY: 1.1299999952316284,
+          blur: 4.1321120262146,
+          alpha: 0.04,
+        },
+        {
+          offsetX: 0,
+          offsetY: 4.130000114440918,
+          blur: 9.94853401184082,
+          alpha: 0.05,
+        },
+        { offsetX: 0, offsetY: 13, blur: 33, alpha: 0.07 },
+      ];
 
-  // Start loading the image
-  img.src = svgUrl;
+      shadows.forEach((shadow, index): void => {
+        ctx.save();
+        ctx.beginPath();
+        ctx.shadowColor = `rgba(0, 0, 0, ${shadow.alpha})`;
+        ctx.shadowBlur = shadow.blur;
+        ctx.shadowOffsetX = shadow.offsetX;
+        ctx.shadowOffsetY = shadow.offsetY;
+
+        if (ctx.roundRect) {
+          ctx.roundRect(
+            MARGIN,
+            MARGIN,
+            normalizedCanvasWidth - MARGIN * 2,
+            normalizedCanvasHeight - MARGIN * 2,
+            BORDER_RADIUS,
+          );
+        } else {
+          roundRect(
+            ctx,
+            MARGIN,
+            MARGIN,
+            normalizedCanvasWidth - MARGIN * 2,
+            normalizedCanvasHeight - MARGIN * 2,
+            BORDER_RADIUS,
+          );
+        }
+
+        if (index === shadows.length - 1) {
+          ctx.fillStyle = rectangleColor;
+          ctx.fill();
+        }
+        ctx.closePath();
+        ctx.restore();
+      });
+
+      // Reset shadow properties for future drawings
+      ctx.shadowColor = "transparent";
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+
+      resolve();
+    };
+
+    img.onerror = (): void => {
+      reject(new Error(`Failed to load image with URL ${svgUrl}`));
+    };
+
+    // Start loading the image
+    img.src = svgUrl;
+  });
 };
 
 export const _renderScene = ({
@@ -558,13 +566,19 @@ export const _renderScene = ({
       }
       context.save();
       if (isExporting && exportBackgroundImage) {
-        addExportBackground(
-          canvas,
-          normalizedCanvasWidth,
-          normalizedCanvasHeight,
-          exportBackgroundImage,
-          renderConfig.viewBackgroundColor,
-        );
+        (async () => {
+          try {
+            await addExportBackground(
+              canvas,
+              normalizedCanvasWidth,
+              normalizedCanvasHeight,
+              exportBackgroundImage,
+              renderConfig.viewBackgroundColor!,
+            );
+          } catch (error) {
+            console.error("Failed to add background:", error);
+          }
+        })();
       } else {
         context.fillStyle = renderConfig.viewBackgroundColor;
         context.fillRect(0, 0, normalizedCanvasWidth, normalizedCanvasHeight);
