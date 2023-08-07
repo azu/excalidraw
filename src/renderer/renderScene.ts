@@ -57,7 +57,12 @@ import {
   isOnlyExportingSingleFrame,
 } from "../utils";
 import { UserIdleState } from "../types";
-import { FRAME_STYLE, THEME_FILTER } from "../constants";
+import {
+  EXPORT_BG_BORDER_RADIUS,
+  EXPORT_BG_PADDING,
+  FRAME_STYLE,
+  THEME_FILTER,
+} from "../constants";
 import {
   EXTERNAL_LINK_IMG,
   getLinkHandleFromCoords,
@@ -385,6 +390,26 @@ const frameClip = (
   );
 };
 
+type Dimensions = { w: number; h: number };
+
+const getScaleToFill = (contentSize: Dimensions, containerSize: Dimensions) => {
+  const scale = Math.max(
+    containerSize.w / contentSize.w,
+    containerSize.h / contentSize.h,
+  );
+
+  return scale;
+};
+
+const getScaleToFit = (contentSize: Dimensions, containerSize: Dimensions) => {
+  const scale = Math.min(
+    containerSize.w / contentSize.w,
+    containerSize.h / contentSize.h,
+  );
+
+  return scale;
+};
+
 const addExportBackground = (
   context: CanvasRenderingContext2D,
   normalizedCanvasWidth: number,
@@ -393,9 +418,6 @@ const addExportBackground = (
   rectangleColor: string,
 ): Promise<void> => {
   return new Promise((resolve, reject) => {
-    const MARGIN = 24;
-    const BORDER_RADIUS = 12;
-
     // Create a new image object
     const img = new Image();
 
@@ -410,7 +432,7 @@ const addExportBackground = (
           0,
           normalizedCanvasWidth,
           normalizedCanvasHeight,
-          BORDER_RADIUS,
+          EXPORT_BG_BORDER_RADIUS,
         );
       } else {
         roundRect(
@@ -419,12 +441,12 @@ const addExportBackground = (
           0,
           normalizedCanvasWidth,
           normalizedCanvasHeight,
-          BORDER_RADIUS,
+          EXPORT_BG_BORDER_RADIUS,
         );
       }
-      const scale = Math.max(
-        normalizedCanvasWidth / img.width,
-        normalizedCanvasHeight / img.height,
+      const scale = getScaleToFill(
+        { w: img.width, h: img.height },
+        { w: normalizedCanvasWidth, h: normalizedCanvasHeight },
       );
       const x = (normalizedCanvasWidth - img.width * scale) / 2;
       const y = (normalizedCanvasHeight - img.height * scale) / 2;
@@ -466,20 +488,20 @@ const addExportBackground = (
 
         if (context.roundRect) {
           context.roundRect(
-            MARGIN,
-            MARGIN,
-            normalizedCanvasWidth - MARGIN * 2,
-            normalizedCanvasHeight - MARGIN * 2,
-            BORDER_RADIUS,
+            EXPORT_BG_PADDING,
+            EXPORT_BG_PADDING,
+            normalizedCanvasWidth - EXPORT_BG_PADDING * 2,
+            normalizedCanvasHeight - EXPORT_BG_PADDING * 2,
+            EXPORT_BG_BORDER_RADIUS,
           );
         } else {
           roundRect(
             context,
-            MARGIN,
-            MARGIN,
-            normalizedCanvasWidth - MARGIN * 2,
-            normalizedCanvasHeight - MARGIN * 2,
-            BORDER_RADIUS,
+            EXPORT_BG_PADDING,
+            EXPORT_BG_PADDING,
+            normalizedCanvasWidth - EXPORT_BG_PADDING * 2,
+            normalizedCanvasHeight - EXPORT_BG_PADDING * 2,
+            EXPORT_BG_BORDER_RADIUS,
           );
         }
 
@@ -644,6 +666,28 @@ export const _renderScene = ({
           },
         ),
       );
+
+      if (isExporting && exportBackgroundImage) {
+        context.save();
+
+        const contentAreaSize: Dimensions = {
+          w: canvas.width - (EXPORT_BG_PADDING + EXPORT_BG_BORDER_RADIUS) * 2,
+          h: canvas.height - (EXPORT_BG_PADDING + EXPORT_BG_BORDER_RADIUS) * 2,
+        };
+
+        const scale = getScaleToFit(
+          {
+            w: canvas.width,
+            h: canvas.height,
+          },
+          contentAreaSize,
+        );
+        context.translate(
+          EXPORT_BG_PADDING + EXPORT_BG_BORDER_RADIUS,
+          EXPORT_BG_PADDING + EXPORT_BG_BORDER_RADIUS,
+        );
+        context.scale(scale, scale);
+      }
 
       const groupsToBeAddedToFrame = new Set<string>();
 
