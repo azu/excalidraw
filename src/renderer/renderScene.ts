@@ -82,6 +82,7 @@ import {
   isElementInFrame,
 } from "../frame";
 import "canvas-roundrect-polyfill";
+import { Unpromisify } from "../utility-types";
 
 export const DEFAULT_SPACING = 2;
 
@@ -577,7 +578,7 @@ export const paintBackground = async (
   }
 };
 
-export const _renderScene = ({
+export const _renderScene = async ({
   elements,
   appState,
   scale,
@@ -591,11 +592,14 @@ export const _renderScene = ({
   rc: RoughCanvas;
   canvas: HTMLCanvasElement;
   renderConfig: RenderConfig;
-}) =>
+}): Promise<{
+  atLeastOneVisibleElement: boolean;
+  scrollBars: ScrollBars | undefined;
+}> =>
   // extra options passed to the renderer
   {
     if (canvas === null) {
-      return { atLeastOneVisibleElement: false };
+      return { atLeastOneVisibleElement: false, scrollBars: undefined };
     }
     const {
       renderScrollbars = false,
@@ -621,628 +625,612 @@ export const _renderScene = ({
       context.filter = THEME_FILTER;
     }
 
-    let renderOutput: {
-      atLeastOneVisibleElement: boolean;
-      scrollBars: ScrollBars | undefined;
-    } = {
-      atLeastOneVisibleElement: false,
-      scrollBars: undefined,
-    };
+    await paintBackground(
+      context,
+      normalizedCanvasWidth,
+      normalizedCanvasHeight,
+      {
+        isExporting,
+        viewBackgroundColor,
+        exportBackgroundImage,
+      },
+    );
+    // Apply zoom
+    context.save();
+    context.scale(renderConfig.zoom.value, renderConfig.zoom.value);
 
-    paintBackground(context, normalizedCanvasWidth, normalizedCanvasHeight, {
-      isExporting,
-      viewBackgroundColor,
-      exportBackgroundImage,
-    }).then(() => {
-      // Apply zoom
-      context.save();
-      context.scale(renderConfig.zoom.value, renderConfig.zoom.value);
-
-      // Grid
-      if (renderGrid && appState.gridSize) {
-        strokeGrid(
-          context,
-          appState.gridSize,
-          renderConfig.scrollX,
-          renderConfig.scrollY,
-          renderConfig.zoom,
-          normalizedCanvasWidth / renderConfig.zoom.value,
-          normalizedCanvasHeight / renderConfig.zoom.value,
-        );
-      }
-
-      // Paint visible elements
-      const visibleElements = elements.filter((element) =>
-        isVisibleElement(
-          element,
-          normalizedCanvasWidth,
-          normalizedCanvasHeight,
-          {
-            zoom: renderConfig.zoom,
-            offsetLeft: appState.offsetLeft,
-            offsetTop: appState.offsetTop,
-            scrollX: renderConfig.scrollX,
-            scrollY: renderConfig.scrollY,
-          },
-        ),
+    // Grid
+    if (renderGrid && appState.gridSize) {
+      strokeGrid(
+        context,
+        appState.gridSize,
+        renderConfig.scrollX,
+        renderConfig.scrollY,
+        renderConfig.zoom,
+        normalizedCanvasWidth / renderConfig.zoom.value,
+        normalizedCanvasHeight / renderConfig.zoom.value,
       );
+    }
 
-      if (isExporting && exportBackgroundImage) {
-        context.save();
+    // Paint visible elements
+    const visibleElements = elements.filter((element) =>
+      isVisibleElement(element, normalizedCanvasWidth, normalizedCanvasHeight, {
+        zoom: renderConfig.zoom,
+        offsetLeft: appState.offsetLeft,
+        offsetTop: appState.offsetTop,
+        scrollX: renderConfig.scrollX,
+        scrollY: renderConfig.scrollY,
+      }),
+    );
 
-        const contentAreaSize: Dimensions = {
-          w: canvas.width - (EXPORT_BG_PADDING + EXPORT_BG_BORDER_RADIUS) * 2,
-          h: canvas.height - (EXPORT_BG_PADDING + EXPORT_BG_BORDER_RADIUS) * 2,
-        };
+    if (isExporting && exportBackgroundImage) {
+      context.save();
 
-        const scale = getScaleToFit(
-          {
-            w: canvas.width,
-            h: canvas.height,
-          },
-          contentAreaSize,
+      const contentAreaSize: Dimensions = {
+        w: canvas.width - (EXPORT_BG_PADDING + EXPORT_BG_BORDER_RADIUS) * 2,
+        h: canvas.height - (EXPORT_BG_PADDING + EXPORT_BG_BORDER_RADIUS) * 2,
+      };
+
+      const scale = getScaleToFit(
+        {
+          w: canvas.width,
+          h: canvas.height,
+        },
+        contentAreaSize,
+      );
+      context.translate(
+        EXPORT_BG_PADDING + EXPORT_BG_BORDER_RADIUS,
+        EXPORT_BG_PADDING + EXPORT_BG_BORDER_RADIUS,
+      );
+      context.scale(scale, scale);
+    }
+
+    const groupsToBeAddedToFrame = new Set<string>();
+
+    visibleElements.forEach((element) => {
+      if (
+        element.groupIds.length > 0 &&
+        appState.frameToHighlight &&
+        appState.selectedElementIds[element.id] &&
+        (elementOverlapsWithFrame(element, appState.frameToHighlight) ||
+          element.groupIds.find((groupId) =>
+            groupsToBeAddedToFrame.has(groupId),
+          ))
+      ) {
+        element.groupIds.forEach((groupId) =>
+          groupsToBeAddedToFrame.add(groupId),
         );
-        context.translate(
-          EXPORT_BG_PADDING + EXPORT_BG_BORDER_RADIUS,
-          EXPORT_BG_PADDING + EXPORT_BG_BORDER_RADIUS,
-        );
-        context.scale(scale, scale);
       }
+    });
 
-      const groupsToBeAddedToFrame = new Set<string>();
+    let editingLinearElement: NonDeleted<ExcalidrawLinearElement> | undefined =
+      undefined;
 
-      visibleElements.forEach((element) => {
-        if (
-          element.groupIds.length > 0 &&
-          appState.frameToHighlight &&
-          appState.selectedElementIds[element.id] &&
-          (elementOverlapsWithFrame(element, appState.frameToHighlight) ||
-            element.groupIds.find((groupId) =>
-              groupsToBeAddedToFrame.has(groupId),
-            ))
-        ) {
-          element.groupIds.forEach((groupId) =>
-            groupsToBeAddedToFrame.add(groupId),
-          );
+    visibleElements
+      .filter((el) => !isEmbeddableOrFrameLabel(el))
+      .forEach((element) => {
+        try {
+          // - when exporting the whole canvas, we DO NOT apply clipping
+          // - when we are exporting a particular frame, apply clipping
+          //   if the containing frame is not selected, apply clipping
+          const frameId = element.frameId || appState.frameToHighlight?.id;
+
+          if (
+            frameId &&
+            ((renderConfig.isExporting &&
+              isOnlyExportingSingleFrame(elements)) ||
+              (!renderConfig.isExporting &&
+                appState.frameRendering.enabled &&
+                appState.frameRendering.clip))
+          ) {
+            context.save();
+
+            const frame = getTargetFrame(element, appState);
+
+            if (frame && isElementInFrame(element, elements, appState)) {
+              frameClip(frame, context, renderConfig);
+            }
+            renderElement(element, rc, context, renderConfig, appState);
+            context.restore();
+          } else {
+            renderElement(element, rc, context, renderConfig, appState);
+          }
+          // Getting the element using LinearElementEditor during collab mismatches version - being one head of visible elements due to
+          // ShapeCache returns empty hence making sure that we get the
+          // correct element from visible elements
+          if (appState.editingLinearElement?.elementId === element.id) {
+            if (element) {
+              editingLinearElement =
+                element as NonDeleted<ExcalidrawLinearElement>;
+            }
+          }
+          if (!isExporting) {
+            renderLinkIcon(element, context, appState);
+          }
+        } catch (error: any) {
+          console.error(error);
         }
       });
 
-      let editingLinearElement:
-        | NonDeleted<ExcalidrawLinearElement>
-        | undefined = undefined;
-
-      visibleElements
-        .filter((el) => !isEmbeddableOrFrameLabel(el))
-        .forEach((element) => {
-          try {
-            // - when exporting the whole canvas, we DO NOT apply clipping
-            // - when we are exporting a particular frame, apply clipping
-            //   if the containing frame is not selected, apply clipping
-            const frameId = element.frameId || appState.frameToHighlight?.id;
+    // render embeddables on top
+    visibleElements
+      .filter((el) => isEmbeddableOrFrameLabel(el))
+      .forEach((element) => {
+        try {
+          const render = () => {
+            renderElement(element, rc, context, renderConfig, appState);
 
             if (
-              frameId &&
-              ((renderConfig.isExporting &&
-                isOnlyExportingSingleFrame(elements)) ||
-                (!renderConfig.isExporting &&
-                  appState.frameRendering.enabled &&
-                  appState.frameRendering.clip))
+              isEmbeddableElement(element) &&
+              (isExporting || !element.validated) &&
+              element.width &&
+              element.height
             ) {
-              context.save();
-
-              const frame = getTargetFrame(element, appState);
-
-              if (frame && isElementInFrame(element, elements, appState)) {
-                frameClip(frame, context, renderConfig);
-              }
-              renderElement(element, rc, context, renderConfig, appState);
-              context.restore();
-            } else {
-              renderElement(element, rc, context, renderConfig, appState);
-            }
-            // Getting the element using LinearElementEditor during collab mismatches version - being one head of visible elements due to
-            // ShapeCache returns empty hence making sure that we get the
-            // correct element from visible elements
-            if (appState.editingLinearElement?.elementId === element.id) {
-              if (element) {
-                editingLinearElement =
-                  element as NonDeleted<ExcalidrawLinearElement>;
-              }
+              const label = createPlaceholderEmbeddableLabel(element);
+              renderElement(label, rc, context, renderConfig, appState);
             }
             if (!isExporting) {
               renderLinkIcon(element, context, appState);
             }
-          } catch (error: any) {
-            console.error(error);
-          }
-        });
+          };
+          // - when exporting the whole canvas, we DO NOT apply clipping
+          // - when we are exporting a particular frame, apply clipping
+          //   if the containing frame is not selected, apply clipping
+          const frameId = element.frameId || appState.frameToHighlight?.id;
 
-      // render embeddables on top
-      visibleElements
-        .filter((el) => isEmbeddableOrFrameLabel(el))
-        .forEach((element) => {
-          try {
-            const render = () => {
-              renderElement(element, rc, context, renderConfig, appState);
+          if (
+            frameId &&
+            ((renderConfig.isExporting &&
+              isOnlyExportingSingleFrame(elements)) ||
+              (!renderConfig.isExporting &&
+                appState.frameRendering.enabled &&
+                appState.frameRendering.clip))
+          ) {
+            context.save();
 
-              if (
-                isEmbeddableElement(element) &&
-                (isExporting || !element.validated) &&
-                element.width &&
-                element.height
-              ) {
-                const label = createPlaceholderEmbeddableLabel(element);
-                renderElement(label, rc, context, renderConfig, appState);
-              }
-              if (!isExporting) {
-                renderLinkIcon(element, context, appState);
-              }
-            };
-            // - when exporting the whole canvas, we DO NOT apply clipping
-            // - when we are exporting a particular frame, apply clipping
-            //   if the containing frame is not selected, apply clipping
-            const frameId = element.frameId || appState.frameToHighlight?.id;
+            const frame = getTargetFrame(element, appState);
 
-            if (
-              frameId &&
-              ((renderConfig.isExporting &&
-                isOnlyExportingSingleFrame(elements)) ||
-                (!renderConfig.isExporting &&
-                  appState.frameRendering.enabled &&
-                  appState.frameRendering.clip))
-            ) {
-              context.save();
-
-              const frame = getTargetFrame(element, appState);
-
-              if (frame && isElementInFrame(element, elements, appState)) {
-                frameClip(frame, context, renderConfig);
-              }
-              render();
-              context.restore();
-            } else {
-              render();
+            if (frame && isElementInFrame(element, elements, appState)) {
+              frameClip(frame, context, renderConfig);
             }
-          } catch (error: any) {
-            console.error(error);
+            render();
+            context.restore();
+          } else {
+            render();
           }
-        });
-
-      if (editingLinearElement) {
-        renderLinearPointHandles(
-          context,
-          appState,
-          renderConfig,
-          editingLinearElement,
-        );
-      }
-
-      // Paint selection element
-      if (appState.selectionElement) {
-        try {
-          renderElement(
-            appState.selectionElement,
-            rc,
-            context,
-            renderConfig,
-            appState,
-          );
         } catch (error: any) {
           console.error(error);
         }
-      }
+      });
 
-      if (isBindingEnabled(appState)) {
-        appState.suggestedBindings
-          .filter((binding) => binding != null)
-          .forEach((suggestedBinding) => {
-            renderBindingHighlight(context, renderConfig, suggestedBinding!);
-          });
-      }
+    if (editingLinearElement) {
+      renderLinearPointHandles(
+        context,
+        appState,
+        renderConfig,
+        editingLinearElement,
+      );
+    }
 
-      if (appState.frameToHighlight) {
-        renderFrameHighlight(context, renderConfig, appState.frameToHighlight);
-      }
-
-      if (appState.elementsToHighlight) {
-        renderElementsBoxHighlight(
+    // Paint selection element
+    if (appState.selectionElement) {
+      try {
+        renderElement(
+          appState.selectionElement,
+          rc,
           context,
           renderConfig,
-          appState.elementsToHighlight,
           appState,
         );
+      } catch (error: any) {
+        console.error(error);
       }
+    }
 
-      const locallySelectedElements = getSelectedElements(elements, appState);
-      const isFrameSelected = locallySelectedElements.some((element) =>
-        isFrameElement(element),
+    if (isBindingEnabled(appState)) {
+      appState.suggestedBindings
+        .filter((binding) => binding != null)
+        .forEach((suggestedBinding) => {
+          renderBindingHighlight(context, renderConfig, suggestedBinding!);
+        });
+    }
+
+    if (appState.frameToHighlight) {
+      renderFrameHighlight(context, renderConfig, appState.frameToHighlight);
+    }
+
+    if (appState.elementsToHighlight) {
+      renderElementsBoxHighlight(
+        context,
+        renderConfig,
+        appState.elementsToHighlight,
+        appState,
+      );
+    }
+
+    const locallySelectedElements = getSelectedElements(elements, appState);
+    const isFrameSelected = locallySelectedElements.some((element) =>
+      isFrameElement(element),
+    );
+
+    // Getting the element using LinearElementEditor during collab mismatches version - being one head of visible elements due to
+    // ShapeCache returns empty hence making sure that we get the
+    // correct element from visible elements
+    if (
+      locallySelectedElements.length === 1 &&
+      appState.editingLinearElement?.elementId === locallySelectedElements[0].id
+    ) {
+      renderLinearPointHandles(
+        context,
+        appState,
+        renderConfig,
+        locallySelectedElements[0] as NonDeleted<ExcalidrawLinearElement>,
+      );
+    }
+
+    if (
+      appState.selectedLinearElement &&
+      appState.selectedLinearElement.hoverPointIndex >= 0
+    ) {
+      renderLinearElementPointHighlight(context, appState, renderConfig);
+    }
+    // Paint selected elements
+    if (
+      renderSelection &&
+      !appState.multiElement &&
+      !appState.editingLinearElement
+    ) {
+      const showBoundingBox = shouldShowBoundingBox(
+        locallySelectedElements,
+        appState,
       );
 
-      // Getting the element using LinearElementEditor during collab mismatches version - being one head of visible elements due to
-      // ShapeCache returns empty hence making sure that we get the
-      // correct element from visible elements
-      if (
+      const locallySelectedIds = locallySelectedElements.map(
+        (element) => element.id,
+      );
+      const isSingleLinearElementSelected =
         locallySelectedElements.length === 1 &&
-        appState.editingLinearElement?.elementId ===
-          locallySelectedElements[0].id
+        isLinearElement(locallySelectedElements[0]);
+      // render selected linear element points
+      if (
+        isSingleLinearElementSelected &&
+        appState.selectedLinearElement?.elementId ===
+          locallySelectedElements[0].id &&
+        !locallySelectedElements[0].locked
       ) {
         renderLinearPointHandles(
           context,
           appState,
           renderConfig,
-          locallySelectedElements[0] as NonDeleted<ExcalidrawLinearElement>,
+          locallySelectedElements[0] as ExcalidrawLinearElement,
         );
       }
-
-      if (
-        appState.selectedLinearElement &&
-        appState.selectedLinearElement.hoverPointIndex >= 0
-      ) {
-        renderLinearElementPointHighlight(context, appState, renderConfig);
-      }
-      // Paint selected elements
-      if (
-        renderSelection &&
-        !appState.multiElement &&
-        !appState.editingLinearElement
-      ) {
-        const showBoundingBox = shouldShowBoundingBox(
-          locallySelectedElements,
-          appState,
-        );
-
-        const locallySelectedIds = locallySelectedElements.map(
-          (element) => element.id,
-        );
-        const isSingleLinearElementSelected =
-          locallySelectedElements.length === 1 &&
-          isLinearElement(locallySelectedElements[0]);
-        // render selected linear element points
-        if (
-          isSingleLinearElementSelected &&
-          appState.selectedLinearElement?.elementId ===
-            locallySelectedElements[0].id &&
-          !locallySelectedElements[0].locked
-        ) {
-          renderLinearPointHandles(
-            context,
-            appState,
-            renderConfig,
-            locallySelectedElements[0] as ExcalidrawLinearElement,
-          );
-        }
-        if (showBoundingBox) {
-          const selections = elements.reduce((acc, element) => {
-            const selectionColors = [];
-            // local user
-            if (
-              locallySelectedIds.includes(element.id) &&
-              !isSelectedViaGroup(appState, element)
-            ) {
-              selectionColors.push(selectionColor);
-            }
-            // remote users
-            if (renderConfig.remoteSelectedElementIds[element.id]) {
-              selectionColors.push(
-                ...renderConfig.remoteSelectedElementIds[element.id].map(
-                  (socketId) => {
-                    const background = getClientColor(socketId);
-                    return background;
-                  },
-                ),
-              );
-            }
-
-            if (selectionColors.length) {
-              const [elementX1, elementY1, elementX2, elementY2, cx, cy] =
-                getElementAbsoluteCoords(element, true);
-              acc.push({
-                angle: element.angle,
-                elementX1,
-                elementY1,
-                elementX2,
-                elementY2,
-                selectionColors,
-                dashed: !!renderConfig.remoteSelectedElementIds[element.id],
-                cx,
-                cy,
-                activeEmbeddable:
-                  appState.activeEmbeddable?.element === element &&
-                  appState.activeEmbeddable.state === "active",
-              });
-            }
-            return acc;
-          }, [] as { angle: number; elementX1: number; elementY1: number; elementX2: number; elementY2: number; selectionColors: string[]; dashed?: boolean; cx: number; cy: number; activeEmbeddable: boolean }[]);
-
-          const addSelectionForGroupId = (groupId: GroupId) => {
-            const groupElements = getElementsInGroup(elements, groupId);
-            const [elementX1, elementY1, elementX2, elementY2] =
-              getCommonBounds(groupElements);
-            selections.push({
-              angle: 0,
-              elementX1,
-              elementX2,
-              elementY1,
-              elementY2,
-              selectionColors: [oc.black],
-              dashed: true,
-              cx: elementX1 + (elementX2 - elementX1) / 2,
-              cy: elementY1 + (elementY2 - elementY1) / 2,
-              activeEmbeddable: false,
-            });
-          };
-
-          for (const groupId of getSelectedGroupIds(appState)) {
-            // TODO: support multiplayer selected group IDs
-            addSelectionForGroupId(groupId);
+      if (showBoundingBox) {
+        const selections = elements.reduce((acc, element) => {
+          const selectionColors = [];
+          // local user
+          if (
+            locallySelectedIds.includes(element.id) &&
+            !isSelectedViaGroup(appState, element)
+          ) {
+            selectionColors.push(selectionColor);
           }
-
-          if (appState.editingGroupId) {
-            addSelectionForGroupId(appState.editingGroupId);
-          }
-
-          selections.forEach((selection) =>
-            renderSelectionBorder(context, renderConfig, selection),
-          );
-        }
-        // Paint resize transformHandles
-        context.save();
-        context.translate(renderConfig.scrollX, renderConfig.scrollY);
-
-        if (locallySelectedElements.length === 1) {
-          context.fillStyle = oc.white;
-          const transformHandles = getTransformHandles(
-            locallySelectedElements[0],
-            renderConfig.zoom,
-            "mouse", // when we render we don't know which pointer type so use mouse
-          );
-          if (!appState.viewModeEnabled && showBoundingBox) {
-            renderTransformHandles(
-              context,
-              renderConfig,
-              transformHandles,
-              locallySelectedElements[0].angle,
+          // remote users
+          if (renderConfig.remoteSelectedElementIds[element.id]) {
+            selectionColors.push(
+              ...renderConfig.remoteSelectedElementIds[element.id].map(
+                (socketId) => {
+                  const background = getClientColor(socketId);
+                  return background;
+                },
+              ),
             );
           }
-        } else if (locallySelectedElements.length > 1 && !appState.isRotating) {
-          const dashedLinePadding =
-            (DEFAULT_SPACING * 2) / renderConfig.zoom.value;
-          context.fillStyle = oc.white;
-          const [x1, y1, x2, y2] = getCommonBounds(locallySelectedElements);
-          const initialLineDash = context.getLineDash();
-          context.setLineDash([2 / renderConfig.zoom.value]);
-          const lineWidth = context.lineWidth;
-          context.lineWidth = 1 / renderConfig.zoom.value;
-          context.strokeStyle = selectionColor;
-          strokeRectWithRotation(
-            context,
-            x1 - dashedLinePadding,
-            y1 - dashedLinePadding,
-            x2 - x1 + dashedLinePadding * 2,
-            y2 - y1 + dashedLinePadding * 2,
-            (x1 + x2) / 2,
-            (y1 + y2) / 2,
-            0,
-          );
-          context.lineWidth = lineWidth;
-          context.setLineDash(initialLineDash);
-          const transformHandles = getTransformHandlesFromCoords(
-            [x1, y1, x2, y2, (x1 + x2) / 2, (y1 + y2) / 2],
-            0,
-            renderConfig.zoom,
-            "mouse",
-            isFrameSelected
-              ? OMIT_SIDES_FOR_FRAME
-              : OMIT_SIDES_FOR_MULTIPLE_ELEMENTS,
-          );
-          if (locallySelectedElements.some((element) => !element.locked)) {
-            renderTransformHandles(context, renderConfig, transformHandles, 0);
+
+          if (selectionColors.length) {
+            const [elementX1, elementY1, elementX2, elementY2, cx, cy] =
+              getElementAbsoluteCoords(element, true);
+            acc.push({
+              angle: element.angle,
+              elementX1,
+              elementY1,
+              elementX2,
+              elementY2,
+              selectionColors,
+              dashed: !!renderConfig.remoteSelectedElementIds[element.id],
+              cx,
+              cy,
+              activeEmbeddable:
+                appState.activeEmbeddable?.element === element &&
+                appState.activeEmbeddable.state === "active",
+            });
           }
+          return acc;
+        }, [] as { angle: number; elementX1: number; elementY1: number; elementX2: number; elementY2: number; selectionColors: string[]; dashed?: boolean; cx: number; cy: number; activeEmbeddable: boolean }[]);
+
+        const addSelectionForGroupId = (groupId: GroupId) => {
+          const groupElements = getElementsInGroup(elements, groupId);
+          const [elementX1, elementY1, elementX2, elementY2] =
+            getCommonBounds(groupElements);
+          selections.push({
+            angle: 0,
+            elementX1,
+            elementX2,
+            elementY1,
+            elementY2,
+            selectionColors: [oc.black],
+            dashed: true,
+            cx: elementX1 + (elementX2 - elementX1) / 2,
+            cy: elementY1 + (elementY2 - elementY1) / 2,
+            activeEmbeddable: false,
+          });
+        };
+
+        for (const groupId of getSelectedGroupIds(appState)) {
+          // TODO: support multiplayer selected group IDs
+          addSelectionForGroupId(groupId);
         }
-        context.restore();
+
+        if (appState.editingGroupId) {
+          addSelectionForGroupId(appState.editingGroupId);
+        }
+
+        selections.forEach((selection) =>
+          renderSelectionBorder(context, renderConfig, selection),
+        );
+      }
+      // Paint resize transformHandles
+      context.save();
+      context.translate(renderConfig.scrollX, renderConfig.scrollY);
+
+      if (locallySelectedElements.length === 1) {
+        context.fillStyle = oc.white;
+        const transformHandles = getTransformHandles(
+          locallySelectedElements[0],
+          renderConfig.zoom,
+          "mouse", // when we render we don't know which pointer type so use mouse
+        );
+        if (!appState.viewModeEnabled && showBoundingBox) {
+          renderTransformHandles(
+            context,
+            renderConfig,
+            transformHandles,
+            locallySelectedElements[0].angle,
+          );
+        }
+      } else if (locallySelectedElements.length > 1 && !appState.isRotating) {
+        const dashedLinePadding =
+          (DEFAULT_SPACING * 2) / renderConfig.zoom.value;
+        context.fillStyle = oc.white;
+        const [x1, y1, x2, y2] = getCommonBounds(locallySelectedElements);
+        const initialLineDash = context.getLineDash();
+        context.setLineDash([2 / renderConfig.zoom.value]);
+        const lineWidth = context.lineWidth;
+        context.lineWidth = 1 / renderConfig.zoom.value;
+        context.strokeStyle = selectionColor;
+        strokeRectWithRotation(
+          context,
+          x1 - dashedLinePadding,
+          y1 - dashedLinePadding,
+          x2 - x1 + dashedLinePadding * 2,
+          y2 - y1 + dashedLinePadding * 2,
+          (x1 + x2) / 2,
+          (y1 + y2) / 2,
+          0,
+        );
+        context.lineWidth = lineWidth;
+        context.setLineDash(initialLineDash);
+        const transformHandles = getTransformHandlesFromCoords(
+          [x1, y1, x2, y2, (x1 + x2) / 2, (y1 + y2) / 2],
+          0,
+          renderConfig.zoom,
+          "mouse",
+          isFrameSelected
+            ? OMIT_SIDES_FOR_FRAME
+            : OMIT_SIDES_FOR_MULTIPLE_ELEMENTS,
+        );
+        if (locallySelectedElements.some((element) => !element.locked)) {
+          renderTransformHandles(context, renderConfig, transformHandles, 0);
+        }
+      }
+      context.restore();
+    }
+
+    // Reset zoom
+    context.restore();
+
+    // Paint remote pointers
+    for (const clientId in renderConfig.remotePointerViewportCoords) {
+      let { x, y } = renderConfig.remotePointerViewportCoords[clientId];
+
+      x -= appState.offsetLeft;
+      y -= appState.offsetTop;
+
+      const width = 11;
+      const height = 14;
+
+      const isOutOfBounds =
+        x < 0 ||
+        x > normalizedCanvasWidth - width ||
+        y < 0 ||
+        y > normalizedCanvasHeight - height;
+
+      x = Math.max(x, 0);
+      x = Math.min(x, normalizedCanvasWidth - width);
+      y = Math.max(y, 0);
+      y = Math.min(y, normalizedCanvasHeight - height);
+
+      const background = getClientColor(clientId);
+
+      context.save();
+      context.strokeStyle = background;
+      context.fillStyle = background;
+
+      const userState = renderConfig.remotePointerUserStates[clientId];
+      const isInactive =
+        isOutOfBounds ||
+        userState === UserIdleState.IDLE ||
+        userState === UserIdleState.AWAY;
+
+      if (isInactive) {
+        context.globalAlpha = 0.3;
       }
 
-      // Reset zoom
-      context.restore();
-
-      // Paint remote pointers
-      for (const clientId in renderConfig.remotePointerViewportCoords) {
-        let { x, y } = renderConfig.remotePointerViewportCoords[clientId];
-
-        x -= appState.offsetLeft;
-        y -= appState.offsetTop;
-
-        const width = 11;
-        const height = 14;
-
-        const isOutOfBounds =
-          x < 0 ||
-          x > normalizedCanvasWidth - width ||
-          y < 0 ||
-          y > normalizedCanvasHeight - height;
-
-        x = Math.max(x, 0);
-        x = Math.min(x, normalizedCanvasWidth - width);
-        y = Math.max(y, 0);
-        y = Math.min(y, normalizedCanvasHeight - height);
-
-        const background = getClientColor(clientId);
-
-        context.save();
-        context.strokeStyle = background;
-        context.fillStyle = background;
-
-        const userState = renderConfig.remotePointerUserStates[clientId];
-        const isInactive =
-          isOutOfBounds ||
-          userState === UserIdleState.IDLE ||
-          userState === UserIdleState.AWAY;
-
-        if (isInactive) {
-          context.globalAlpha = 0.3;
-        }
-
-        if (
-          renderConfig.remotePointerButton &&
-          renderConfig.remotePointerButton[clientId] === "down"
-        ) {
-          context.beginPath();
-          context.arc(x, y, 15, 0, 2 * Math.PI, false);
-          context.lineWidth = 3;
-          context.strokeStyle = "#ffffff88";
-          context.stroke();
-          context.closePath();
-
-          context.beginPath();
-          context.arc(x, y, 15, 0, 2 * Math.PI, false);
-          context.lineWidth = 1;
-          context.strokeStyle = background;
-          context.stroke();
-          context.closePath();
-        }
-
-        // Background (white outline) for arrow
-        context.fillStyle = oc.white;
-        context.strokeStyle = oc.white;
-        context.lineWidth = 6;
-        context.lineJoin = "round";
+      if (
+        renderConfig.remotePointerButton &&
+        renderConfig.remotePointerButton[clientId] === "down"
+      ) {
         context.beginPath();
+        context.arc(x, y, 15, 0, 2 * Math.PI, false);
+        context.lineWidth = 3;
+        context.strokeStyle = "#ffffff88";
+        context.stroke();
+        context.closePath();
+
+        context.beginPath();
+        context.arc(x, y, 15, 0, 2 * Math.PI, false);
+        context.lineWidth = 1;
+        context.strokeStyle = background;
+        context.stroke();
+        context.closePath();
+      }
+
+      // Background (white outline) for arrow
+      context.fillStyle = oc.white;
+      context.strokeStyle = oc.white;
+      context.lineWidth = 6;
+      context.lineJoin = "round";
+      context.beginPath();
+      context.moveTo(x, y);
+      context.lineTo(x + 0, y + 14);
+      context.lineTo(x + 4, y + 9);
+      context.lineTo(x + 11, y + 8);
+      context.closePath();
+      context.stroke();
+      context.fill();
+
+      // Arrow
+      context.fillStyle = background;
+      context.strokeStyle = background;
+      context.lineWidth = 2;
+      context.lineJoin = "round";
+      context.beginPath();
+      if (isInactive) {
+        context.moveTo(x - 1, y - 1);
+        context.lineTo(x - 1, y + 15);
+        context.lineTo(x + 5, y + 10);
+        context.lineTo(x + 12, y + 9);
+        context.closePath();
+        context.fill();
+      } else {
         context.moveTo(x, y);
         context.lineTo(x + 0, y + 14);
         context.lineTo(x + 4, y + 9);
         context.lineTo(x + 11, y + 8);
         context.closePath();
-        context.stroke();
         context.fill();
-
-        // Arrow
-        context.fillStyle = background;
-        context.strokeStyle = background;
-        context.lineWidth = 2;
-        context.lineJoin = "round";
-        context.beginPath();
-        if (isInactive) {
-          context.moveTo(x - 1, y - 1);
-          context.lineTo(x - 1, y + 15);
-          context.lineTo(x + 5, y + 10);
-          context.lineTo(x + 12, y + 9);
-          context.closePath();
-          context.fill();
-        } else {
-          context.moveTo(x, y);
-          context.lineTo(x + 0, y + 14);
-          context.lineTo(x + 4, y + 9);
-          context.lineTo(x + 11, y + 8);
-          context.closePath();
-          context.fill();
-          context.stroke();
-        }
-
-        const username = renderConfig.remotePointerUsernames[clientId] || "";
-
-        if (!isOutOfBounds && username) {
-          context.font = "600 12px sans-serif"; // font has to be set before context.measureText()
-
-          const offsetX = x + width / 2;
-          const offsetY = y + height + 2;
-          const paddingHorizontal = 5;
-          const paddingVertical = 3;
-          const measure = context.measureText(username);
-          const measureHeight =
-            measure.actualBoundingBoxDescent + measure.actualBoundingBoxAscent;
-          const finalHeight = Math.max(measureHeight, 12);
-
-          const boxX = offsetX - 1;
-          const boxY = offsetY - 1;
-          const boxWidth = measure.width + 2 + paddingHorizontal * 2 + 2;
-          const boxHeight = finalHeight + 2 + paddingVertical * 2 + 2;
-          if (context.roundRect) {
-            context.beginPath();
-            context.roundRect(boxX, boxY, boxWidth, boxHeight, 8);
-            context.fillStyle = background;
-            context.fill();
-            context.strokeStyle = oc.white;
-            context.stroke();
-          } else {
-            roundRect(context, boxX, boxY, boxWidth, boxHeight, 8, oc.white);
-          }
-          context.fillStyle = oc.black;
-
-          context.fillText(
-            username,
-            offsetX + paddingHorizontal + 1,
-            offsetY +
-              paddingVertical +
-              measure.actualBoundingBoxAscent +
-              Math.floor((finalHeight - measureHeight) / 2) +
-              2,
-          );
-        }
-
-        context.restore();
-        context.closePath();
+        context.stroke();
       }
 
-      // Paint scrollbars
-      let scrollBars;
-      if (renderScrollbars) {
-        scrollBars = getScrollBars(
-          elements,
-          normalizedCanvasWidth,
-          normalizedCanvasHeight,
-          renderConfig,
-        );
+      const username = renderConfig.remotePointerUsernames[clientId] || "";
 
-        context.save();
-        context.fillStyle = SCROLLBAR_COLOR;
-        context.strokeStyle = "rgba(255,255,255,0.8)";
-        [scrollBars.horizontal, scrollBars.vertical].forEach((scrollBar) => {
-          if (scrollBar) {
-            roundRect(
-              context,
-              scrollBar.x,
-              scrollBar.y,
-              scrollBar.width,
-              scrollBar.height,
-              SCROLLBAR_WIDTH / 2,
-            );
-          }
-        });
-        context.restore();
+      if (!isOutOfBounds && username) {
+        context.font = "600 12px sans-serif"; // font has to be set before context.measureText()
+
+        const offsetX = x + width / 2;
+        const offsetY = y + height + 2;
+        const paddingHorizontal = 5;
+        const paddingVertical = 3;
+        const measure = context.measureText(username);
+        const measureHeight =
+          measure.actualBoundingBoxDescent + measure.actualBoundingBoxAscent;
+        const finalHeight = Math.max(measureHeight, 12);
+
+        const boxX = offsetX - 1;
+        const boxY = offsetY - 1;
+        const boxWidth = measure.width + 2 + paddingHorizontal * 2 + 2;
+        const boxHeight = finalHeight + 2 + paddingVertical * 2 + 2;
+        if (context.roundRect) {
+          context.beginPath();
+          context.roundRect(boxX, boxY, boxWidth, boxHeight, 8);
+          context.fillStyle = background;
+          context.fill();
+          context.strokeStyle = oc.white;
+          context.stroke();
+        } else {
+          roundRect(context, boxX, boxY, boxWidth, boxHeight, 8, oc.white);
+        }
+        context.fillStyle = oc.black;
+
+        context.fillText(
+          username,
+          offsetX + paddingHorizontal + 1,
+          offsetY +
+            paddingVertical +
+            measure.actualBoundingBoxAscent +
+            Math.floor((finalHeight - measureHeight) / 2) +
+            2,
+        );
       }
 
       context.restore();
+      context.closePath();
+    }
 
-      renderOutput = {
-        atLeastOneVisibleElement: visibleElements.length > 0,
-        scrollBars,
-      };
-    });
+    // Paint scrollbars
+    let scrollBars;
+    if (renderScrollbars) {
+      scrollBars = getScrollBars(
+        elements,
+        normalizedCanvasWidth,
+        normalizedCanvasHeight,
+        renderConfig,
+      );
+
+      context.save();
+      context.fillStyle = SCROLLBAR_COLOR;
+      context.strokeStyle = "rgba(255,255,255,0.8)";
+      [scrollBars.horizontal, scrollBars.vertical].forEach((scrollBar) => {
+        if (scrollBar) {
+          roundRect(
+            context,
+            scrollBar.x,
+            scrollBar.y,
+            scrollBar.width,
+            scrollBar.height,
+            SCROLLBAR_WIDTH / 2,
+          );
+        }
+      });
+      context.restore();
+    }
+
+    context.restore();
 
     return {
-      atLeastOneVisibleElement: renderOutput.atLeastOneVisibleElement,
-      scrollBars: renderOutput.scrollBars ?? undefined,
+      atLeastOneVisibleElement: visibleElements.length > 0,
+      scrollBars,
     };
   };
 
 const renderSceneThrottled = throttleRAF(
-  (config: {
+  async (config: {
     elements: readonly NonDeletedExcalidrawElement[];
     appState: AppState;
     scale: number;
     rc: RoughCanvas;
     canvas: HTMLCanvasElement;
     renderConfig: RenderConfig;
-    callback?: (data: ReturnType<typeof _renderScene>) => void;
+    callback?: (data: Unpromisify<ReturnType<typeof _renderScene>>) => void;
   }) => {
-    const ret = _renderScene(config);
+    const ret = await _renderScene(config);
     config.callback?.(ret);
   },
   { trailing: true },
 );
 
 /** renderScene throttled to animation framerate */
-export const renderScene = <T extends boolean = false>(
+export const renderScene = async <T extends boolean = false>(
   config: {
     elements: readonly NonDeletedExcalidrawElement[];
     appState: AppState;
@@ -1250,19 +1238,25 @@ export const renderScene = <T extends boolean = false>(
     rc: RoughCanvas;
     canvas: HTMLCanvasElement;
     renderConfig: RenderConfig;
-    callback?: (data: ReturnType<typeof _renderScene>) => void;
+    callback?: (data: Unpromisify<ReturnType<typeof _renderScene>>) => void;
   },
   /** Whether to throttle rendering. Defaults to false.
    * When throttling, no value is returned. Use the callback instead. */
   throttle?: T,
-): T extends true ? void : ReturnType<typeof _renderScene> => {
+): Promise<
+  T extends true ? void : Unpromisify<ReturnType<typeof _renderScene>>
+> => {
   if (throttle) {
     renderSceneThrottled(config);
-    return undefined as T extends true ? void : ReturnType<typeof _renderScene>;
+    return undefined as T extends true
+      ? void
+      : Unpromisify<ReturnType<typeof _renderScene>>;
   }
-  const ret = _renderScene(config);
+  const ret = await _renderScene(config);
   config.callback?.(ret);
-  return ret as T extends true ? void : ReturnType<typeof _renderScene>;
+  return ret as T extends true
+    ? void
+    : Unpromisify<ReturnType<typeof _renderScene>>;
 };
 
 const renderTransformHandles = (

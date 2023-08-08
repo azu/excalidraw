@@ -54,7 +54,7 @@ export const exportToCanvas = async (
 
   const onlyExportingSingleFrame = isOnlyExportingSingleFrame(elements);
 
-  renderScene({
+  await renderScene({
     elements,
     appState,
     scale,
