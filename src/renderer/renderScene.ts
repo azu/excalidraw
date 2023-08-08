@@ -1219,7 +1219,10 @@ export const _renderScene = ({
       };
     });
 
-    return renderOutput;
+    return {
+      atLeastOneVisibleElement: renderOutput.atLeastOneVisibleElement,
+      scrollBars: renderOutput.scrollBars ?? undefined,
+    };
   };
 
 const renderSceneThrottled = throttleRAF(
