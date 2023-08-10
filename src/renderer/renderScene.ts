@@ -22,7 +22,7 @@ import {
 } from "../element";
 
 import { roundRect } from "./roundRect";
-import { RenderConfig, ScrollBars } from "../scene/types";
+import { RenderConfig } from "../scene/types";
 import {
   getScrollBars,
   SCROLLBAR_COLOR,
@@ -57,12 +57,7 @@ import {
   isOnlyExportingSingleFrame,
 } from "../utils";
 import { UserIdleState } from "../types";
-import {
-  EXPORT_BG_BORDER_RADIUS,
-  EXPORT_BG_PADDING,
-  FRAME_STYLE,
-  THEME_FILTER,
-} from "../constants";
+import { FRAME_STYLE, THEME_FILTER } from "../constants";
 import {
   EXTERNAL_LINK_IMG,
   getLinkHandleFromCoords,
@@ -82,7 +77,6 @@ import {
   isElementInFrame,
 } from "../frame";
 import "canvas-roundrect-polyfill";
-import { Unpromisify } from "../utility-types";
 
 export const DEFAULT_SPACING = 2;
 
@@ -391,194 +385,7 @@ const frameClip = (
   );
 };
 
-type Dimensions = { w: number; h: number };
-
-const getScaleToFill = (contentSize: Dimensions, containerSize: Dimensions) => {
-  const scale = Math.max(
-    containerSize.w / contentSize.w,
-    containerSize.h / contentSize.h,
-  );
-
-  return scale;
-};
-
-const getScaleToFit = (contentSize: Dimensions, containerSize: Dimensions) => {
-  const scale = Math.min(
-    containerSize.w / contentSize.w,
-    containerSize.h / contentSize.h,
-  );
-
-  return scale;
-};
-
-const addExportBackground = (
-  context: CanvasRenderingContext2D,
-  normalizedCanvasWidth: number,
-  normalizedCanvasHeight: number,
-  svgUrl: string,
-  rectangleColor: string,
-): Promise<void> => {
-  return new Promise((resolve, reject) => {
-    // Create a new image object
-    const img = new Image();
-
-    // When the image has loaded
-    img.onload = (): void => {
-      // Scale image to fill canvas and draw it onto the canvas
-      context.save();
-      context.beginPath();
-      if (context.roundRect) {
-        context.roundRect(
-          0,
-          0,
-          normalizedCanvasWidth,
-          normalizedCanvasHeight,
-          EXPORT_BG_BORDER_RADIUS,
-        );
-      } else {
-        roundRect(
-          context,
-          0,
-          0,
-          normalizedCanvasWidth,
-          normalizedCanvasHeight,
-          EXPORT_BG_BORDER_RADIUS,
-        );
-      }
-      const scale = getScaleToFill(
-        { w: img.width, h: img.height },
-        { w: normalizedCanvasWidth, h: normalizedCanvasHeight },
-      );
-      const x = (normalizedCanvasWidth - img.width * scale) / 2;
-      const y = (normalizedCanvasHeight - img.height * scale) / 2;
-      context.clip();
-      context.drawImage(img, x, y, img.width * scale, img.height * scale);
-      context.closePath();
-      context.restore();
-
-      // Create shadow similar to the CSS box-shadow
-      const shadows = [
-        {
-          offsetX: 0,
-          offsetY: 0.7698959708213806,
-          blur: 1.4945039749145508,
-          alpha: 0.02,
-        },
-        {
-          offsetX: 0,
-          offsetY: 1.1299999952316284,
-          blur: 4.1321120262146,
-          alpha: 0.04,
-        },
-        {
-          offsetX: 0,
-          offsetY: 4.130000114440918,
-          blur: 9.94853401184082,
-          alpha: 0.05,
-        },
-        { offsetX: 0, offsetY: 13, blur: 33, alpha: 0.07 },
-      ];
-
-      shadows.forEach((shadow, index): void => {
-        context.save();
-        context.beginPath();
-        context.shadowColor = `rgba(0, 0, 0, ${shadow.alpha})`;
-        context.shadowBlur = shadow.blur;
-        context.shadowOffsetX = shadow.offsetX;
-        context.shadowOffsetY = shadow.offsetY;
-
-        if (context.roundRect) {
-          context.roundRect(
-            EXPORT_BG_PADDING,
-            EXPORT_BG_PADDING,
-            normalizedCanvasWidth - EXPORT_BG_PADDING * 2,
-            normalizedCanvasHeight - EXPORT_BG_PADDING * 2,
-            EXPORT_BG_BORDER_RADIUS,
-          );
-        } else {
-          roundRect(
-            context,
-            EXPORT_BG_PADDING,
-            EXPORT_BG_PADDING,
-            normalizedCanvasWidth - EXPORT_BG_PADDING * 2,
-            normalizedCanvasHeight - EXPORT_BG_PADDING * 2,
-            EXPORT_BG_BORDER_RADIUS,
-          );
-        }
-
-        if (index === shadows.length - 1) {
-          context.fillStyle = rectangleColor;
-          context.fill();
-        }
-        context.closePath();
-        context.restore();
-      });
-
-      // Reset shadow properties for future drawings
-      context.shadowColor = "transparent";
-      context.shadowBlur = 0;
-      context.shadowOffsetX = 0;
-      context.shadowOffsetY = 0;
-
-      resolve();
-    };
-
-    img.onerror = (): void => {
-      reject(new Error(`Failed to load image with URL ${svgUrl}`));
-    };
-
-    // Start loading the image
-    img.src = svgUrl;
-  });
-};
-
-export const paintBackground = async (
-  context: CanvasRenderingContext2D,
-  normalizedCanvasWidth: number,
-  normalizedCanvasHeight: number,
-  {
-    viewBackgroundColor,
-    isExporting,
-    exportBackgroundImage,
-  }: Pick<
-    RenderConfig,
-    "viewBackgroundColor" | "isExporting" | "exportBackgroundImage"
-  >,
-): Promise<void> => {
-  if (typeof viewBackgroundColor === "string") {
-    const hasTransparence =
-      viewBackgroundColor === "transparent" ||
-      viewBackgroundColor.length === 5 || // #RGBA
-      viewBackgroundColor.length === 9 || // #RRGGBBA
-      /(hsla|rgba)\(/.test(viewBackgroundColor);
-    if (hasTransparence) {
-      context.clearRect(0, 0, normalizedCanvasWidth, normalizedCanvasHeight);
-    }
-    context.save();
-    if (isExporting && exportBackgroundImage) {
-      try {
-        await addExportBackground(
-          context,
-          normalizedCanvasWidth,
-          normalizedCanvasHeight,
-          exportBackgroundImage,
-          viewBackgroundColor,
-        );
-      } catch (error) {
-        console.error("Failed to add background:", error);
-      }
-    } else {
-      context.fillStyle = viewBackgroundColor;
-      context.fillRect(0, 0, normalizedCanvasWidth, normalizedCanvasHeight);
-    }
-
-    context.restore();
-  } else {
-    context.clearRect(0, 0, normalizedCanvasWidth, normalizedCanvasHeight);
-  }
-};
-
-export const _renderScene = async ({
+export const _renderScene = ({
   elements,
   appState,
   scale,
@@ -592,23 +399,21 @@ export const _renderScene = async ({
   rc: RoughCanvas;
   canvas: HTMLCanvasElement;
   renderConfig: RenderConfig;
-}): Promise<{
-  atLeastOneVisibleElement: boolean;
-  scrollBars: ScrollBars | undefined;
-}> =>
+}) =>
   // extra options passed to the renderer
   {
     if (canvas === null) {
-      return { atLeastOneVisibleElement: false, scrollBars: undefined };
+      return { atLeastOneVisibleElement: false };
     }
     const {
       renderScrollbars = false,
       renderSelection = true,
       renderGrid = true,
       isExporting,
-      viewBackgroundColor,
-      exportBackgroundImage,
     } = renderConfig;
+
+    const preserveCanvasContent =
+      isExporting && appState.fancyBackgroundImageUrl;
 
     const selectionColor = renderConfig.selectionColor || oc.black;
 
@@ -625,16 +430,24 @@ export const _renderScene = async ({
       context.filter = THEME_FILTER;
     }
 
-    await paintBackground(
-      context,
-      normalizedCanvasWidth,
-      normalizedCanvasHeight,
-      {
-        isExporting,
-        viewBackgroundColor,
-        exportBackgroundImage,
-      },
-    );
+    // Paint background
+    if (typeof renderConfig.viewBackgroundColor === "string") {
+      const hasTransparence =
+        renderConfig.viewBackgroundColor === "transparent" ||
+        renderConfig.viewBackgroundColor.length === 5 || // #RGBA
+        renderConfig.viewBackgroundColor.length === 9 || // #RRGGBBA
+        /(hsla|rgba)\(/.test(renderConfig.viewBackgroundColor);
+      if (hasTransparence && !preserveCanvasContent) {
+        context.clearRect(0, 0, normalizedCanvasWidth, normalizedCanvasHeight);
+      }
+      context.save();
+      context.fillStyle = renderConfig.viewBackgroundColor;
+      context.fillRect(0, 0, normalizedCanvasWidth, normalizedCanvasHeight);
+      context.restore();
+    } else if (!preserveCanvasContent) {
+      context.clearRect(0, 0, normalizedCanvasWidth, normalizedCanvasHeight);
+    }
+
     // Apply zoom
     context.save();
     context.scale(renderConfig.zoom.value, renderConfig.zoom.value);
@@ -662,28 +475,6 @@ export const _renderScene = async ({
         scrollY: renderConfig.scrollY,
       }),
     );
-
-    if (isExporting && exportBackgroundImage) {
-      context.save();
-
-      const contentAreaSize: Dimensions = {
-        w: canvas.width - (EXPORT_BG_PADDING + EXPORT_BG_BORDER_RADIUS) * 2,
-        h: canvas.height - (EXPORT_BG_PADDING + EXPORT_BG_BORDER_RADIUS) * 2,
-      };
-
-      const scale = getScaleToFit(
-        {
-          w: canvas.width,
-          h: canvas.height,
-        },
-        contentAreaSize,
-      );
-      context.translate(
-        EXPORT_BG_PADDING + EXPORT_BG_BORDER_RADIUS,
-        EXPORT_BG_PADDING + EXPORT_BG_BORDER_RADIUS,
-      );
-      context.scale(scale, scale);
-    }
 
     const groupsToBeAddedToFrame = new Set<string>();
 
@@ -1206,31 +997,27 @@ export const _renderScene = async ({
     }
 
     context.restore();
-
-    return {
-      atLeastOneVisibleElement: visibleElements.length > 0,
-      scrollBars,
-    };
+    return { atLeastOneVisibleElement: visibleElements.length > 0, scrollBars };
   };
 
 const renderSceneThrottled = throttleRAF(
-  async (config: {
+  (config: {
     elements: readonly NonDeletedExcalidrawElement[];
     appState: AppState;
     scale: number;
     rc: RoughCanvas;
     canvas: HTMLCanvasElement;
     renderConfig: RenderConfig;
-    callback?: (data: Unpromisify<ReturnType<typeof _renderScene>>) => void;
+    callback?: (data: ReturnType<typeof _renderScene>) => void;
   }) => {
-    const ret = await _renderScene(config);
+    const ret = _renderScene(config);
     config.callback?.(ret);
   },
   { trailing: true },
 );
 
 /** renderScene throttled to animation framerate */
-export const renderScene = async <T extends boolean = false>(
+export const renderScene = <T extends boolean = false>(
   config: {
     elements: readonly NonDeletedExcalidrawElement[];
     appState: AppState;
@@ -1238,25 +1025,19 @@ export const renderScene = async <T extends boolean = false>(
     rc: RoughCanvas;
     canvas: HTMLCanvasElement;
     renderConfig: RenderConfig;
-    callback?: (data: Unpromisify<ReturnType<typeof _renderScene>>) => void;
+    callback?: (data: ReturnType<typeof _renderScene>) => void;
   },
   /** Whether to throttle rendering. Defaults to false.
    * When throttling, no value is returned. Use the callback instead. */
   throttle?: T,
-): Promise<
-  T extends true ? void : Unpromisify<ReturnType<typeof _renderScene>>
-> => {
+): T extends true ? void : ReturnType<typeof _renderScene> => {
   if (throttle) {
     renderSceneThrottled(config);
-    return undefined as T extends true
-      ? void
-      : Unpromisify<ReturnType<typeof _renderScene>>;
+    return undefined as T extends true ? void : ReturnType<typeof _renderScene>;
   }
-  const ret = await _renderScene(config);
+  const ret = _renderScene(config);
   config.callback?.(ret);
-  return ret as T extends true
-    ? void
-    : Unpromisify<ReturnType<typeof _renderScene>>;
+  return ret as T extends true ? void : ReturnType<typeof _renderScene>;
 };
 
 const renderTransformHandles = (

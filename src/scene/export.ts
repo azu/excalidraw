@@ -12,6 +12,7 @@ import {
   updateImageCache,
 } from "../element/image";
 import Scene from "./Scene";
+import { applyFancyBackground } from "./fancyBackground";
 
 export const SVG_EXPORT_TAG = `<!-- svg-source:excalidraw -->`;
 
@@ -54,14 +55,25 @@ export const exportToCanvas = async (
 
   const onlyExportingSingleFrame = isOnlyExportingSingleFrame(elements);
 
-  await renderScene({
+  if (appState.fancyBackgroundImageUrl) {
+    await applyFancyBackground(
+      canvas,
+      appState.fancyBackgroundImageUrl,
+      viewBackgroundColor,
+    );
+  }
+
+  renderScene({
     elements,
     appState,
     scale,
     rc: rough.canvas(canvas),
     canvas,
     renderConfig: {
-      viewBackgroundColor: exportBackground ? viewBackgroundColor : null,
+      viewBackgroundColor:
+        exportBackground && !appState.fancyBackgroundImageUrl
+          ? viewBackgroundColor
+          : null,
       scrollX: -minX + (onlyExportingSingleFrame ? 0 : exportPadding),
       scrollY: -minY + (onlyExportingSingleFrame ? 0 : exportPadding),
       zoom: defaultAppState.zoom,
@@ -76,7 +88,7 @@ export const exportToCanvas = async (
       renderSelection: false,
       renderGrid: false,
       isExporting: true,
-      exportBackgroundImage: appState.exportBackgroundImage,
+      exportBackgroundImage: appState.fancyBackgroundImageUrl,
     },
   });
 
