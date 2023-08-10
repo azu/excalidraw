@@ -4,7 +4,12 @@ import { getCommonBounds, getElementAbsoluteCoords } from "../element/bounds";
 import { renderScene, renderSceneToSvg } from "../renderer/renderScene";
 import { distance, isOnlyExportingSingleFrame } from "../utils";
 import { AppState, BinaryFiles } from "../types";
-import { DEFAULT_EXPORT_PADDING, SVG_NS, THEME_FILTER } from "../constants";
+import {
+  DEFAULT_EXPORT_PADDING,
+  SVG_NS,
+  THEME,
+  THEME_FILTER,
+} from "../constants";
 import { getDefaultAppState } from "../appState";
 import { serializeAsJSON } from "../data/json";
 import {
@@ -13,6 +18,7 @@ import {
 } from "../element/image";
 import Scene from "./Scene";
 import { applyFancyBackground } from "./fancyBackground";
+import { RenderConfig } from "./types";
 
 export const SVG_EXPORT_TAG = `<!-- svg-source:excalidraw -->`;
 
@@ -41,7 +47,7 @@ export const exportToCanvas = async (
 ) => {
   const [minX, minY, width, height] = getCanvasSize(elements, exportPadding);
 
-  const { canvas, scale = 1 } = createCanvas(width, height);
+  let { canvas, scale = 1 } = createCanvas(width, height);
 
   const defaultAppState = getDefaultAppState();
 
@@ -55,12 +61,40 @@ export const exportToCanvas = async (
 
   const onlyExportingSingleFrame = isOnlyExportingSingleFrame(elements);
 
+  let renderConfig: RenderConfig = {
+    viewBackgroundColor:
+      exportBackground && !appState.fancyBackgroundImageUrl
+        ? viewBackgroundColor
+        : null,
+    scrollX: -minX + (onlyExportingSingleFrame ? 0 : exportPadding),
+    scrollY: -minY + (onlyExportingSingleFrame ? 0 : exportPadding),
+    zoom: defaultAppState.zoom,
+    remotePointerViewportCoords: {},
+    remoteSelectedElementIds: {},
+    shouldCacheIgnoreZoom: false,
+    remotePointerUsernames: {},
+    remotePointerUserStates: {},
+    theme: appState.exportWithDarkMode ? THEME.DARK : THEME.LIGHT,
+    imageCache,
+    renderScrollbars: false,
+    renderSelection: false,
+    renderGrid: false,
+    isExporting: true,
+    exportBackgroundImage: appState.fancyBackgroundImageUrl,
+  };
+
   if (appState.fancyBackgroundImageUrl) {
-    await applyFancyBackground(
+    const updatedRenderProps = await applyFancyBackground({
       canvas,
-      appState.fancyBackgroundImageUrl,
-      viewBackgroundColor,
-    );
+      fancyBackgroundImageUrl: appState.fancyBackgroundImageUrl,
+      backgroundColor: viewBackgroundColor,
+      scale,
+      renderConfig,
+    });
+
+    console.log(scale, updatedRenderProps.scale);
+    renderConfig = updatedRenderProps.renderConfig;
+    scale = updatedRenderProps.scale;
   }
 
   renderScene({
@@ -69,27 +103,7 @@ export const exportToCanvas = async (
     scale,
     rc: rough.canvas(canvas),
     canvas,
-    renderConfig: {
-      viewBackgroundColor:
-        exportBackground && !appState.fancyBackgroundImageUrl
-          ? viewBackgroundColor
-          : null,
-      scrollX: -minX + (onlyExportingSingleFrame ? 0 : exportPadding),
-      scrollY: -minY + (onlyExportingSingleFrame ? 0 : exportPadding),
-      zoom: defaultAppState.zoom,
-      remotePointerViewportCoords: {},
-      remoteSelectedElementIds: {},
-      shouldCacheIgnoreZoom: false,
-      remotePointerUsernames: {},
-      remotePointerUserStates: {},
-      theme: appState.exportWithDarkMode ? "dark" : "light",
-      imageCache,
-      renderScrollbars: false,
-      renderSelection: false,
-      renderGrid: false,
-      isExporting: true,
-      exportBackgroundImage: appState.fancyBackgroundImageUrl,
-    },
+    renderConfig,
   });
 
   return canvas;
