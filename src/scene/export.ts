@@ -84,15 +84,19 @@ export const exportToCanvas = async (
   };
 
   if (appState.fancyBackgroundImageUrl) {
+    const contentBounds = getCommonBounds(elements);
     const updatedRenderProps = await applyFancyBackground({
       canvas,
       fancyBackgroundImageUrl: appState.fancyBackgroundImageUrl,
       backgroundColor: viewBackgroundColor,
       scale,
       renderConfig,
+      contentDimensions: {
+        w: contentBounds[2] - contentBounds[0],
+        h: contentBounds[3] - contentBounds[1],
+      },
     });
 
-    console.log(scale, updatedRenderProps.scale);
     renderConfig = updatedRenderProps.renderConfig;
     scale = updatedRenderProps.scale;
   }
