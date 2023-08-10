@@ -83,7 +83,7 @@ export const exportToCanvas = async (
     exportBackgroundImage: appState.fancyBackgroundImageUrl,
   };
 
-  if (appState.fancyBackgroundImageUrl) {
+  if (exportBackground && appState.fancyBackgroundImageUrl) {
     const contentBounds = getCommonBounds(elements);
     const updatedRenderProps = await applyFancyBackground({
       canvas,
