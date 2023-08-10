@@ -6,6 +6,8 @@ import { distance, isOnlyExportingSingleFrame } from "../utils";
 import { AppState, BinaryFiles } from "../types";
 import {
   DEFAULT_EXPORT_PADDING,
+  FANCY_BG_BORDER_RADIUS,
+  FANCY_BG_PADDING,
   SVG_NS,
   THEME,
   THEME_FILTER,
@@ -45,9 +47,17 @@ export const exportToCanvas = async (
     return { canvas, scale: appState.exportScale };
   },
 ) => {
-  const [minX, minY, width, height] = getCanvasSize(elements, exportPadding);
+  const exportWithFancyBackground =
+    exportBackground &&
+    !!appState.fancyBackgroundImageUrl &&
+    elements.length > 0;
+  const padding = !exportWithFancyBackground
+    ? exportPadding
+    : exportPadding + FANCY_BG_PADDING + FANCY_BG_BORDER_RADIUS;
 
-  let { canvas, scale = 1 } = createCanvas(width, height);
+  const [minX, minY, width, height] = getCanvasSize(elements, padding);
+
+  const { canvas, scale = 1 } = createCanvas(width, height);
 
   const defaultAppState = getDefaultAppState();
 
@@ -61,13 +71,13 @@ export const exportToCanvas = async (
 
   const onlyExportingSingleFrame = isOnlyExportingSingleFrame(elements);
 
-  let renderConfig: RenderConfig = {
+  const renderConfig: RenderConfig = {
     viewBackgroundColor:
       exportBackground && !appState.fancyBackgroundImageUrl
         ? viewBackgroundColor
         : null,
-    scrollX: -minX + (onlyExportingSingleFrame ? 0 : exportPadding),
-    scrollY: -minY + (onlyExportingSingleFrame ? 0 : exportPadding),
+    scrollX: -minX + (onlyExportingSingleFrame ? 0 : padding),
+    scrollY: -minY + (onlyExportingSingleFrame ? 0 : padding),
     zoom: defaultAppState.zoom,
     remotePointerViewportCoords: {},
     remoteSelectedElementIds: {},
@@ -83,22 +93,12 @@ export const exportToCanvas = async (
     exportBackgroundImage: appState.fancyBackgroundImageUrl,
   };
 
-  if (exportBackground && appState.fancyBackgroundImageUrl) {
-    const contentBounds = getCommonBounds(elements);
-    const updatedRenderProps = await applyFancyBackground({
+  if (exportWithFancyBackground) {
+    await applyFancyBackground({
       canvas,
-      fancyBackgroundImageUrl: appState.fancyBackgroundImageUrl,
+      fancyBackgroundImageUrl: appState.fancyBackgroundImageUrl!,
       backgroundColor: viewBackgroundColor,
-      scale,
-      renderConfig,
-      contentDimensions: {
-        w: contentBounds[2] - contentBounds[0],
-        h: contentBounds[3] - contentBounds[1],
-      },
     });
-
-    renderConfig = updatedRenderProps.renderConfig;
-    scale = updatedRenderProps.scale;
   }
 
   renderScene({
