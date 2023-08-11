@@ -98,6 +98,7 @@ export const exportToCanvas = async (
       canvas,
       fancyBackgroundImageUrl: appState.fancyBackgroundImageUrl!,
       backgroundColor: viewBackgroundColor,
+      exportScale: appState.exportScale,
     });
   }
 
