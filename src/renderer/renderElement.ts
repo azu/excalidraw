@@ -41,6 +41,7 @@ import { getDefaultAppState } from "../appState";
 import {
   BOUND_TEXT_PADDING,
   FRAME_STYLE,
+  IMAGE_INVERT_FILTER,
   MAX_DECIMALS_FOR_SVG_EXPORT,
   MIME_TYPES,
   SVG_NS,
@@ -61,12 +62,6 @@ import {
 } from "../element/embeddable";
 import { getContainingFrame } from "../frame";
 import { normalizeLink, toValidURL } from "../data/url";
-
-// using a stronger invert (100% vs our regular 93%) and saturate
-// as a temp hack to make images in dark theme look closer to original
-// color scheme (it's still not quite there and the colors look slightly
-// desatured, alas...)
-const IMAGE_INVERT_FILTER = "invert(100%) hue-rotate(180deg) saturate(1.25)";
 
 const defaultAppState = getDefaultAppState();
 

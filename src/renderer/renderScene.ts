@@ -413,7 +413,7 @@ export const _renderScene = ({
     } = renderConfig;
 
     const preserveCanvasContent =
-      isExporting && appState.fancyBackgroundImageUrl;
+      isExporting && appState.fancyBackgroundImageKey;
 
     const selectionColor = renderConfig.selectionColor || oc.black;
 
