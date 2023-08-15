@@ -4,6 +4,7 @@ import {
   CURSOR_TYPE,
   DEFAULT_VERSION,
   EVENT,
+  EXPORT_SCALES,
   FONT_FAMILY,
   isDarwin,
   MIME_TYPES,
@@ -914,3 +915,7 @@ export const isOnlyExportingSingleFrame = (
     )
   );
 };
+
+export const defaultExportScale = EXPORT_SCALES.includes(devicePixelRatio)
+  ? devicePixelRatio
+  : 1;
